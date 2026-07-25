@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { about, creditSections, resumePdf, site, stats } from "@/content/portfolio";
+import { about, contact, creditSections, resumePdf, site, stats } from "@/content/portfolio";
 import { PageHeader } from "@/components/page-header";
 
 export const metadata: Metadata = {
@@ -11,25 +11,44 @@ export const metadata: Metadata = {
 export default function ResumePage() {
   const sections = creditSections.filter((section) => section.credits.length > 0);
 
+  // Only show vitals that are actually set — an empty row invites the reader
+  // to wonder what is being withheld.
+  const vitals = [
+    { label: "Height", value: stats.height },
+    { label: "Eyes", value: stats.eyes },
+    { label: "Hair", value: stats.hair },
+    { label: "Voice", value: stats.vocalRange },
+    { label: "Union", value: stats.unions },
+  ].filter((item): item is { label: string; value: string } => Boolean(item.value));
+
+  const hasContent = sections.length > 0 || about.training.length > 0 || about.skills.length > 0;
+
   return (
     <>
       <PageHeader title="Résumé" />
 
       <div className="mx-auto max-w-5xl px-6 pb-8">
         {/* Vitals */}
-        <dl className="border-line divide-line grid grid-cols-2 gap-x-8 gap-y-4 border-y py-6 sm:grid-cols-4">
-          {[
-            { label: "Height", value: stats.height },
-            { label: "Eyes", value: stats.eyes },
-            { label: "Hair", value: stats.hair },
-            { label: "Voice", value: stats.vocalRange },
-          ].map((item) => (
-            <div key={item.label}>
-              <dt className="text-muted text-xs tracking-wide uppercase">{item.label}</dt>
-              <dd className="mt-1 text-sm">{item.value}</dd>
-            </div>
-          ))}
-        </dl>
+        {vitals.length > 0 ? (
+          <dl className="border-line divide-line grid grid-cols-2 gap-x-8 gap-y-4 border-y py-6 sm:grid-cols-4">
+            {vitals.map((item) => (
+              <div key={item.label}>
+                <dt className="text-muted text-xs tracking-wide uppercase">{item.label}</dt>
+                <dd className="mt-1 text-sm">{item.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+
+        {!hasContent ? (
+          <p className="text-muted mt-8 max-w-xl leading-relaxed">
+            Credits and training are being added. For a current résumé, please{" "}
+            <a href={`mailto:${contact.email}`} className="text-ink underline underline-offset-4">
+              get in touch
+            </a>
+            .
+          </p>
+        ) : null}
 
         {resumePdf ? (
           <a

@@ -23,7 +23,8 @@ export default function HomePage() {
             </h1>
             <p className="text-muted mt-5 text-lg sm:text-xl">{site.tagline}</p>
             <p className="text-muted mt-2 text-sm">
-              Based in {site.basedIn} · {stats.unions}
+              Based in {site.basedIn}
+              {stats.unions ? ` · ${stats.unions}` : ""}
             </p>
 
             <div className="mt-9 flex flex-wrap gap-3">

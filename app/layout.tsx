@@ -3,7 +3,7 @@ import { Inter, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 import { SiteNav } from "@/components/site-nav";
 import { SiteFooter } from "@/components/site-footer";
-import { site } from "@/content/portfolio";
+import { identity, sameAs, searchIndexing, site } from "@/content/portfolio";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -39,6 +39,13 @@ export const metadata: Metadata = {
     title: `${site.name} — ${site.tagline}`,
     description: site.description,
   },
+  // Vercel only noindexes preview deployments, not the production domain,
+  // so this has to be explicit. Driven by the flag in content/portfolio.ts.
+  robots: {
+    index: searchIndexing,
+    follow: searchIndexing,
+    googleBot: { index: searchIndexing, follow: searchIndexing },
+  },
 };
 
 // `metadata.viewport` and `metadata.themeColor` are deprecated in this version —
@@ -55,6 +62,23 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // schema.org Person. `sameAs` is what lets Google resolve this Alex Glaze as
+  // a distinct entity from the others sharing the name; jobTitle and alumniOf
+  // disambiguate further. Inert while `searchIndexing` is false, but ready.
+  const personJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Person",
+    name: site.name,
+    url: site.url,
+    jobTitle: identity.jobTitle,
+    description: site.description,
+    alumniOf: {
+      "@type": "CollegeOrUniversity",
+      name: identity.alumniOf,
+    },
+    ...(sameAs.length > 0 ? { sameAs } : {}),
+  };
+
   return (
     // `data-scroll-behavior` is required for Next to honour the
     // `scroll-behavior: smooth` set in globals.css during navigation.
@@ -75,6 +99,14 @@ export default function RootLayout({
           {children}
         </main>
         <SiteFooter />
+        {/* `<` escape per the Next.js JSON-LD guide — JSON.stringify alone
+            does not sanitise strings that could close the script tag. */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(personJsonLd).replace(/</g, "\\u003c"),
+          }}
+        />
       </body>
     </html>
   );

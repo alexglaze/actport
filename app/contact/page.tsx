@@ -61,7 +61,8 @@ export default function ContactPage() {
               </a>
             </p>
             <p className="text-muted mt-2 text-sm">
-              Based in {site.basedIn} · {stats.unions}
+              Based in {site.basedIn}
+              {stats.unions ? ` · ${stats.unions}` : ""}
             </p>
           </section>
 
