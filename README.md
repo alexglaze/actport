@@ -1,56 +1,39 @@
-# actport
+# airlock
 
-Acting portfolio site for Alex Glaze. Next.js 16 (App Router) + TypeScript + Tailwind CSS v4, deployed on Vercel.
+A policy gateway between a tool-using AI agent and the tools it calls.
 
-## Editing your content
+Every action the agent proposes is checked against a declared policy before
+it runs. Irreversible actions go to a person, any attempt to modify the
+agent's own oversight ends the session, and every step lands in a
+tamper-evident log. It is built on the assumption that the model proposing
+the action can't be fully trusted: it reads text it didn't choose, it makes
+mistakes, and nobody can yet verify its goals from the outside.
 
-**You only need to edit one file: [`content/portfolio.ts`](content/portfolio.ts).**
+**The project lives in [`airlock/`](airlock/):** code, tests, docs, and the
+evaluation suite.
 
-Every page reads from it — your name, bio, credits, headshots, reel, and contact details. Anything currently marked `PLACEHOLDER` is fake and should be replaced. No page files need to change.
+- [What guardrails tool-using agents need](airlock/docs/position.md): the argument, including what a library can't provide
+- [Threat model](airlock/docs/threat-model.md)
+- [Design](airlock/docs/design.md)
+- [Evaluation](airlock/docs/evaluation.md) and [full results](airlock/docs/results.md)
 
-### Adding headshots
-
-1. Drop image files into `public/headshots/`.
-2. Point the `src` fields in the `headshots` array at them (e.g. `/headshots/theatrical.jpg`).
-
-Recommended: 4:5 aspect ratio (1200×1500), JPEG, under ~400KB each. Every headshot needs a real `alt` description — it is what screen readers announce and what search engines index.
-
-### Adding your reel
-
-Set `reel.embedUrl` to a **player/embed** URL, not the page URL:
-
-| Platform | Use this form |
-| --- | --- |
-| YouTube | `https://www.youtube.com/embed/VIDEO_ID` |
-| Vimeo | `https://player.vimeo.com/video/VIDEO_ID` |
-
-Leave it as `null` and the reel section is hidden entirely.
-
-### Adding your resume PDF
-
-Put the PDF in `public/` and set `resumePdf` to its path (e.g. `/alex-glaze-resume.pdf`). Leave it `null` to hide the download button. The credits table renders from `creditSections` either way, so the site works with no PDF at all.
-
-## Running locally
+The evaluation runs 23 scripted scenarios without the gateway, with a
+reviewer who approves exactly what the principal wanted, with one who
+approves everything, and with none. With a good reviewer, none of the 15
+out-of-policy actions run and all 8 ordinary tasks complete. With a
+rubber-stamp reviewer, 3 get through, and they are exactly the 3 whose only
+defence was review. That last number is the one that says how much of the
+safety rests on a person's attention.
 
 ```bash
-npm install
-npm run dev
+cd airlock
+pip install -e ".[dev]"
+pytest
+python -m airlock eval
 ```
 
-Open http://localhost:3000.
+## Also in this repository
 
-## Checks
-
-```bash
-npm run typecheck   # tsc --noEmit
-npm run lint        # eslint
-npm run build       # production build
-```
-
-Run these before pushing — Vercel will fail the deploy on a type or lint error.
-
-## Deploying
-
-Pushes to `main` deploy to production automatically via the Vercel git integration. Pull requests get their own preview URL.
-
-Set `site.url` in `content/portfolio.ts` to your real domain once you have one — it is used for canonical links and social share previews.
+The rest of the root is the source for my acting portfolio site (Next.js,
+deployed on Vercel). Notes for editing it are in
+[content/README.md](content/README.md).
