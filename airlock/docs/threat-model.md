@@ -52,6 +52,7 @@ Every action that passes through `Session.check`:
 | What's *inside* a content argument | airlock governs where data goes and which actions happen, not message contents | Narrow recipient scope, review of egress, separate content inspection where required |
 | Values derived from untrusted text (not copied verbatim) | Provenance only recognises verbatim copies | Scope limits still apply. Architectural separation of planning from untrusted data is the principled fix |
 | Malicious or mis-declared tools | The gateway trusts declarations | Review tool specs like any security config. Run `airlock lint-policy` |
+| What an allowlisted program does with its arguments | Arguments are held to read scope. The program's own writes and network use are not mediated | Allowlist programs whose side effects you accept. Sandbox the rest |
 | A compromised host, gateway, or reviewer | They are the trusted base | Standard system security |
 | Harm assembled from individually allowed steps | No sequence model beyond budgets and the denial breaker | Budgets bound volume. LLM monitors can look at trajectories, with their own limits |
 | Audit log truncation | A hash chain can't detect lost records at its tail | Publish the head hash elsewhere (ticket, commit, log shipper) |

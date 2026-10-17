@@ -40,3 +40,8 @@ def test_verify_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert main(["verify-log", "--key-env", "AIRLOCK_KEY", str(path)]) == 0
     monkeypatch.setenv("AIRLOCK_KEY", "wrong")
     assert main(["verify-log", "--key-env", "AIRLOCK_KEY", str(path)]) == 1
+
+
+def test_verify_missing_log(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["verify-log", str(tmp_path / "nope.jsonl")]) == 2
+    assert "error:" in capsys.readouterr().err

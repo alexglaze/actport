@@ -52,12 +52,14 @@ class DenyAll:
 
 
 class CallbackReviewer:
+    """Approves only when ``fn`` returns exactly ``True``; any other value is a rejection."""
+
     def __init__(self, fn: Callable[[ReviewRequest], bool], name: str = "callback") -> None:
         self._fn = fn
         self._name = name
 
     def review(self, request: ReviewRequest) -> Review:
-        return Review(approved=bool(self._fn(request)), reviewer=self._name)
+        return Review(approved=self._fn(request) is True, reviewer=self._name)
 
 
 class ConsoleReviewer:

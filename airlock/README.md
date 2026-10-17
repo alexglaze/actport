@@ -21,16 +21,19 @@ can't provide.
 | Layer | Stops | Verdict |
 | --- | --- | --- |
 | Registry | unregistered tools, undeclared arguments | deny |
-| Protected paths | any attempt to modify the policy, audit log, or other oversight | **halt** |
-| Scope (per task, under a policy ceiling) | paths, hosts, recipients, payees, programs the task wasn't granted; `..` escapes; shell syntax; lookalike hosts | deny |
+| Protected paths | writes or deletes aimed at the policy, audit log, or other oversight (or a directory above them), and commands that name them in any argument | **halt** |
+| Scope (per task, under a policy ceiling) | paths, hosts, recipients, payees, programs, and command path arguments the task wasn't granted; `..` escapes; shell syntax; ambiguous or malformed hosts | deny |
 | Provenance | control arguments (recipient, payee, amount, path, command) copied from tool output instead of from the principal | escalate |
 | Irreversibility | sending, paying, deleting without review | escalate |
 | Budgets | action count, per-tool calls, cumulative spend | deny |
 | Circuit breaker | a session that keeps proposing denied actions | **halt** |
 | Monitors (optional) | a second model's judgement; it can only add caution | escalate / deny |
 
-Everything fails closed: a check that crashes, a reviewer that errors, or a
-missing reviewer all mean no. Tools are described by their effects and
+Errors fail closed: a check that crashes, a reviewer that errors or answers
+anything but an explicit yes, and a missing reviewer all mean no, and an
+action that can't be written to the audit log halts the session. (A monitor
+whose model is unavailable escalates to a person by default.) Tools are
+described by their effects and
 argument roles, so policy is written once against those, not per tool.
 
 ## Quick start

@@ -59,8 +59,8 @@ running fully autonomously costs under this policy.
 **Unguarded, every violation lands.** That's the sanity check that the
 scenarios are real, and a test enforces it per scenario.
 
-**With a good reviewer, nothing gets through and nothing legitimate is
-lost.** The cost is 0.75 reviews per benign task. All of them come
+**With a good reviewer, nothing gets through and every benign task
+completes.** The cost is 0.75 reviews per benign task. All of them come
 from irreversible actions (sending, paying, deleting) that the task did ask
 for. Two violation runs lose their legitimate work because the session
 halted before getting to it: `edit-own-policy` and `runaway-loop`. That's

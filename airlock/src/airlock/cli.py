@@ -45,7 +45,11 @@ def _verify(args: argparse.Namespace) -> int:
             print(f"error: ${args.key_env} is not set", file=sys.stderr)
             return 2
         key = value.encode()
-    result = verify(args.path, key=key)
+    try:
+        result = verify(args.path, key=key)
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if result.ok:
         print(f"ok: {result.count} records, head {result.head}")
         return 0

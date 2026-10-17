@@ -11,6 +11,12 @@ to case and surrounding punctuation). A value the agent derived or
 transformed from untrusted text is reported as NOVEL, not UNTRUSTED. That is
 why provenance is one layer among several and never the only thing standing
 between a value and a sink.
+
+"Verbatim" means the value occurs as a whole token: the characters around it
+must not continue it. Letters, digits, ``_``, ``@``, ``+`` and ``-`` always
+continue a value, and so does ``.`` when another such character follows, so
+``team@acme.example`` is not found inside ``finance-team@acme.example`` or
+``team@acme.example.org``, but is found at the end of a sentence.
 """
 
 from __future__ import annotations
@@ -20,6 +26,9 @@ import math
 import re
 from dataclasses import dataclass, field
 
+_BEFORE = r"(?<![\w@+.-])"
+_AFTER = r"(?![\w@+-]|\.[\w@+-])"
+_NUMERIC_STRING = re.compile(r"\$?\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?")
 _NUMBER = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w])|(?<![\w.])\d+(?:\.\d+)?(?![\w])")
 
 
@@ -67,17 +76,25 @@ class Provenance:
         self._untrusted.append(_Text(source, text.casefold(), _numbers(text)))
 
     def attribute(self, value: object) -> Attribution:
-        """Attribute a single argument value. Numbers are compared numerically."""
+        """Attribute a single argument value.
+
+        Numbers, and strings that are just a number (``"1,200"``, ``"$420.00"``),
+        are compared numerically at any size. Other strings shorter than
+        ``min_length`` are never attributed.
+        """
         if isinstance(value, bool):
             return Attribution(Origin.NOVEL)
         if isinstance(value, int | float):
             return self._attribute_number(float(value))
         if not isinstance(value, str):
             return Attribution(Origin.NOVEL)
+        numeric = _NUMERIC_STRING.fullmatch(value.strip())
+        if numeric:
+            return self._attribute_number(float(numeric.group(1).replace(",", "") + (numeric.group(2) or "")))
         needle = value.strip().casefold()
         if len(needle) < self.min_length:
             return Attribution(Origin.NOVEL)
-        pattern = re.compile(r"(?<!\w)" + re.escape(needle) + r"(?!\w)")
+        pattern = re.compile(_BEFORE + re.escape(needle) + _AFTER)
         if any(pattern.search(t.folded) for t in self._trusted):
             return Attribution(Origin.TRUSTED)
         sources = tuple(t.source for t in self._untrusted if pattern.search(t.folded))

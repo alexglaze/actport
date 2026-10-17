@@ -72,8 +72,8 @@ first one.
 | Check | Looks at | Verdict |
 | --- | --- | --- |
 | `registry` | Is the tool registered? Are all arguments declared? | `unknown_tool` (default deny) / deny |
-| `protected` | Does a modifying tool (write, delete, execute) touch a protected path, including via a command argument? | **halt** |
-| `scope` | Paths (read vs. write scope, after normalising `..`), URL hosts (exact or true subdomain, IDNA-normalised, no credentials in URLs), recipients, payees, amounts, commands (allowlisted program, no shell syntax) | deny |
+| `protected` | Does a write or delete target a protected path or a directory above one? Does a command name a protected path in any argument? | **halt** |
+| `scope` | Paths (read vs. write scope, after normalising `..`), URL hosts (exact or true subdomain, strict DNS syntax, no credentials in URLs), recipients, payees, amounts, commands (allowlisted program, no shell syntax, path arguments within read scope) | deny |
 | `provenance` | For consequential tools: was a control argument copied from untrusted output and not from the principal? | `checks.provenance` (default escalate) |
 | `irreversible` | Is the tool declared irreversible? | `checks.irreversible` (default escalate) |
 | `budget` | Session action count, per-tool call count, cumulative spend | deny |
@@ -99,6 +99,28 @@ session that would widen the ceiling raises `ScopeError` when it starts, not
 halfway through. Protected paths from the policy are always merged into the
 session's scope, so narrowing can never drop them.
 
+Path entries come in two kinds. A plain entry covers that path and
+everything below it. An entry containing `*`, `?` or `[` is a glob, matched
+against the whole normalised path (`*` crosses `/`). Relative entries
+resolve against the scope's `cwd`. Comparing a session grant to the ceiling
+has to account for both kinds, so a session glob is accepted only if the
+ceiling has the identical glob, or if everything it can match lies under a
+plain ceiling directory. A plain session entry is accepted only under a
+plain ceiling directory, because a glob ceiling can't vouch for the subtree
+below a name it happens to match.
+
+Hosts are compared in ASCII form. A non-ASCII name is accepted only if its
+IDNA encoding round-trips. Names that IDNA 2003 maps onto other characters
+(`ß`, fullwidth letters) are rejected, because resolvers disagree about
+them, and so is anything that isn't valid DNS syntax. Rejected hosts are out
+of scope, not errors.
+
+Commands run without a shell, so shell syntax is rejected outright. The
+program must be allowlisted, and every positional argument, plus any option
+value that looks like a path (`--out=PATH`, `-oPATH`), must resolve inside
+read scope. What an allowlisted program then does with those paths is up to
+the program, so allowlist programs whose side effects you accept.
+
 ### Provenance
 
 The session keeps two pools of text:
@@ -116,10 +138,14 @@ For each argument of a consequential tool whose role is in
 | untrusted | appears only in untrusted text | finding at `checks.provenance` |
 | novel | appears in neither | none |
 
-Matching is whole-value and case-insensitive, with word boundaries, so
-`dana@acme.example` doesn't match inside `xdana@acme.example`. Numbers are
-compared numerically, so `420`, `420.0`, and `$420.00` agree. Values shorter
-than three characters are never attributed.
+Matching is case-insensitive and whole-token: the characters around an
+occurrence must not continue the value. Letters, digits, `_`, `@`, `+` and
+`-` continue a value, and so does `.` when another such character follows.
+So `team@acme.example` is found at the end of a sentence but not inside
+`finance-team@acme.example` or `team@acme.example.org`. Numbers, and strings
+that are just a number, are compared numerically, so `420`, `"420.0"`, and
+`"$420.00"` agree, at any size. Other strings shorter than three characters
+are never attributed.
 
 **Why escalate rather than deny?** Because the same signal fires on
 legitimate work. "Reply to the person who emailed me" has to take the
@@ -146,11 +172,21 @@ actions matching an explicit, task-specific plan. Lowering the verdict to
 
 ### Protected paths
 
-Writes, deletes, and executions that touch `scope.protected_paths` halt the
-session. Command arguments are parsed and each argument is checked as a
-path, so a `wc .airlock/audit.jsonl` is caught the same way a `write_file`
-is. Reading protected files is allowed: the agent may need to know what its
-policy is.
+These halt the session:
+
+- a write or delete whose path is inside a protected path, or *above* one
+  (deleting `/workspace` deletes `/workspace/.airlock`);
+- a command that names a protected path in any argument, including option
+  values (`--out=…`, `-o…`) or a spelling that normalises to one
+  (`notes/../.airlock`). As a backstop, the literal protected path appearing
+  anywhere in the command also halts.
+
+Reading protected files is allowed: the agent may need to know what its
+policy is. A command that lists a parent directory is allowed too, since
+listing isn't modifying. What argument inspection can't see is a program
+that changes a protected file without naming it, which is why the policy
+and log should also live outside the agent's reach (threat model,
+assumption 3).
 
 ### Budgets and the circuit breaker
 
@@ -186,9 +222,12 @@ class Reviewer(Protocol):
 ```
 
 Bundled: `ConsoleReviewer` (anything but an explicit yes is a no),
-`CallbackReviewer`, and `ApproveAll` / `DenyAll` (used by the evaluation to
-bracket reviewer quality). `ReviewRequest.render()` gives the reviewer the
-task, the action, its effects and reversibility, and every finding.
+`CallbackReviewer` (approves only when the callback returns exactly `True`),
+and `ApproveAll` / `DenyAll` (used by the evaluation to bracket reviewer
+quality). A reviewer that raises, or returns anything other than a `Review`
+with a boolean answer, counts as a rejection. `ReviewRequest.render()` gives
+the reviewer the task, the action, its effects and reversibility, and every
+finding.
 
 ## Audit log
 
@@ -201,17 +240,24 @@ JSON lines, one record per event (`session_start`, `principal_message`,
 
 `hash = H(prev + "\n" + canonical_json(record without hash))`, with SHA-256,
 or HMAC-SHA-256 if a key is configured. `airlock verify-log` re-walks the
-chain and reports the first bad record. Opening an existing log verifies it
-first and refuses to append to a broken one.
+chain and reports the first bad record. Each line must also be exactly the
+canonical serialisation of the record it parses to, so extra text that a
+JSON parser would quietly drop can't ride along on a valid hash. Records are
+ASCII-escaped, so any string an agent produces can be logged. Opening an
+existing log verifies it first and refuses to append to a broken one. If a
+decision can't be written, the session halts: an action that can't be
+audited doesn't run.
 
 What it detects: edits, deletions, and reorders inside the chain. With a
 key, it also detects recomputing the chain without the key. What it doesn't
 detect: truncation at the tail. That's why `AuditLog.head` exists, so you
 can publish it elsewhere.
 
-Tool outputs are logged as SHA-256 plus length unless `log_outputs=True`.
-The log should prove what happened without becoming a second copy of
-everything the agent read.
+Tool outputs are logged as SHA-256 plus length unless `log_outputs=True`,
+so the log doesn't also become a copy of everything the agent read.
+Arguments are logged in full, because they're the decision being audited.
+That includes message bodies and file contents, so treat the log as
+sensitive.
 
 ## Integration
 
@@ -235,6 +281,6 @@ tool results, carrying the reasons, so it can adjust.
   actions may happen. It doesn't read message bodies. Mixing the two makes
   both worse, and content inspection is a separate, well-served problem.
 - **No runtime dependencies.** The trusted base should be small enough to
-  read. It's about 1,600 lines of standard-library Python, CLI included.
+  read. It's about 1,800 lines of standard-library Python, CLI included.
 - **No async API.** Checks are cheap and synchronous. A slow LLM monitor is
   the exception, and it can be wrapped.

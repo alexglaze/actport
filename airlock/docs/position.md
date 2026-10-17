@@ -89,20 +89,27 @@ oversight off, by accident or otherwise. Attempts to modify oversight
 deserve more than a denial. They are a strong signal that something has gone
 wrong, so the session should stop.
 
-*In airlock:* protected paths. Any attempt to modify them halts the session,
-including indirectly through command arguments.
+*In airlock:* protected paths. A write or delete aimed at one, or at a
+directory above one, halts the session, and so does a command that names one
+in any argument. A program that changes a protected file without naming it
+is beyond what argument inspection can see. That's one reason oversight
+should also live outside the agent's reach entirely.
 
 ### 5. Fail closed. Deterministic layers first, model judgment second.
 
-Every error path should end in "no": an unknown tool, an argument that won't
-parse, a check that crashes, a reviewer that times out. Model-based monitors
+Every error path should end in "no", or at worst in front of a person: an
+unknown tool, an argument that won't parse, a check that crashes, a reviewer
+that errors or gives anything but an explicit yes, an action that can't be
+recorded. Model-based monitors
 are useful because they catch what rules don't anticipate. But they read the
 same untrusted content the agent reads, so they can be misled by it. They
 should only ever *add* caution, never overrule a deterministic denial.
 
-*In airlock:* any exception in a check or monitor is a denial. Monitors run
-only when no deterministic check has already denied, and a monitor's verdict
-can only raise the result, never lower it.
+*In airlock:* an exception in a check, a monitor, or a reviewer is a
+denial, and a failed audit write halts the session. A monitor whose model
+can't be reached escalates to a person by default (`on_error`, which can be
+set to deny). Monitors run only when no deterministic check has already
+denied, and a monitor's verdict can only raise the result, never lower it.
 
 ### 6. Bound the damage in volume, not just in kind
 
@@ -123,9 +130,10 @@ was decided, by which rule, and who approved it. That record should exist
 for every action, and it should be hard to rewrite quietly.
 
 *In airlock:* an append-only, hash-chained audit log, optionally keyed
-(HMAC). Each decision records its findings and any review. Tool outputs are
-logged as digests by default, so the log doesn't become a second copy of
-sensitive data.
+(HMAC). Each decision records its arguments, findings, and any review. Tool
+outputs are logged as digests by default, so the log doesn't also become a
+copy of everything the agent read. The arguments are the decision being
+audited, so they're logged in full, and the log is sensitive accordingly.
 
 ### 8. Measure the guardrails, including what they cost
 
@@ -176,7 +184,7 @@ These matter at least as much, and none of them live in this repository:
 
 ## Open problems
 
-- **Provenance beyond copying.** Whole-value matching misses values the
+- **Provenance beyond copying.** Whole-token matching misses values the
   agent derived from untrusted text. Doing this properly means separating
   the component that plans from the component that touches untrusted data,
   so untrusted data can't reach control decisions at all. That is an

@@ -8,6 +8,7 @@ from airlock import (
     ActionBlocked,
     Airlock,
     ApproveAll,
+    AuditLog,
     Budget,
     CallbackReviewer,
     DenyAll,
@@ -230,3 +231,83 @@ def test_every_decision_is_audited(airlock: Airlock) -> None:
     assert events == ["session_start", "decision", "result"]
     result = airlock.audit.records[-1]["data"]
     assert result["chars"] == 8 and "output" not in result
+
+
+def _with(**scope: Any) -> Any:
+    policy = default_policy()
+    return replace(policy, scope=replace(policy.scope, **scope))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "wc --files0-from=/workspace/.airlock/policy.toml",
+        "wc -o/workspace/.airlock/audit.jsonl",
+        "wc ./notes/../.airlock/policy.toml",
+    ],
+)
+def test_protected_paths_in_any_argument_form_halt(command: str) -> None:
+    s = Airlock(_with(commands=("wc",))).session("task")
+    assert s.check(Action("run_command", {"command": command})).verdict is Verdict.HALT
+
+
+def test_deleting_a_parent_of_oversight_halts() -> None:
+    s = Airlock(_with(write_paths=("/workspace",)), reviewer=ApproveAll()).session("task")
+    assert s.check(Action("delete_file", {"path": "/workspace"})).verdict is Verdict.HALT
+    assert s.halted
+
+
+def test_relative_protected_entries_resolve_against_cwd() -> None:
+    s = Airlock(_with(protected_paths=(".airlock",), write_paths=("/workspace",))).session("task")
+    d = s.check(Action("write_file", {"path": "/workspace/.airlock/policy.toml", "content": ""}))
+    assert d.verdict is Verdict.HALT
+
+
+def test_command_arguments_are_held_to_read_scope() -> None:
+    s = Airlock(_with(commands=("wc",))).session("task")
+    d = s.check(Action("run_command", {"command": "wc /etc/hosts"}))
+    assert d.verdict is Verdict.DENY and "outside read scope" in d.findings[0].message
+    assert s.check(Action("run_command", {"command": "wc notes/a.md"})).allowed
+
+
+def test_approved_unregistered_tools_still_use_budget() -> None:
+    policy = replace(default_policy(), unknown_tool=Verdict.ESCALATE, budget=Budget(max_actions=2))
+    s = Airlock(policy, reviewer=ApproveAll()).session("task")
+    verdicts = [s.check(Action("mystery", {})).verdict for _ in range(3)]
+    assert verdicts == [Verdict.ALLOW, Verdict.ALLOW, Verdict.DENY]
+    assert s.usage.actions == 2
+
+
+@pytest.mark.parametrize("answer", ["no", 1, None, "yes"])
+def test_callback_reviewers_approve_only_on_true(answer: object) -> None:
+    s = Airlock(default_policy(), reviewer=CallbackReviewer(lambda r: answer)).session("task")  # type: ignore[arg-type,return-value]
+    assert s.check(Action("delete_file", {"path": "/workspace/out/x"})).verdict is Verdict.DENY
+
+
+def test_reviewers_returning_garbage_are_rejections() -> None:
+    class Weird:
+        def review(self, request: Any) -> Any:
+            return True
+
+    s = Airlock(default_policy(), reviewer=Weird()).session("task")
+    d = s.check(Action("delete_file", {"path": "/workspace/out/x"}))
+    assert d.verdict is Verdict.DENY and d.review is not None and d.review.reviewer == "error"
+
+
+def test_an_action_that_cannot_be_audited_halts() -> None:
+    class FailingLog(AuditLog):
+        def append(self, event: str, data: Any) -> dict[str, Any]:
+            if event == "decision":
+                raise OSError("disk full")
+            return super().append(event, data)
+
+    s = Airlock(default_policy(), audit=FailingLog()).session("task")
+    d = s.check(Action("read_file", {"path": "/workspace/a"}))
+    assert d.verdict is Verdict.HALT and s.halted
+
+
+def test_lone_surrogates_do_not_break_the_pipeline(airlock: Airlock) -> None:
+    s = airlock.session("task")
+    d = s.check(Action("write_file", {"path": "/workspace/out/a", "content": "x\ud800"}))
+    assert d.allowed
+    s.record_result(d, "out\udfff")

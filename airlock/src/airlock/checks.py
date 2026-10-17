@@ -6,6 +6,7 @@ DENY finding. (If a check does raise, the gateway fails closed anyway.)
 
 from __future__ import annotations
 
+import posixpath
 from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -16,11 +17,13 @@ from .provenance import Origin, Provenance
 from .scope import (
     Scope,
     command_allowed,
+    command_path_args,
     host_allowed,
     normalize_path,
     parse_amount,
     parse_command,
     path_matches,
+    path_within,
     payee_allowed,
     recipient_allowed,
     url_host,
@@ -77,35 +80,59 @@ def registry(ctx: Context, action: Action) -> list[Finding]:
 
 
 def protected(ctx: Context, action: Action) -> list[Finding]:
-    """The agent may never modify its own oversight: policy, audit log, approval channel."""
+    """The agent may never modify its own oversight: policy, audit log, approval channel.
+
+    Caught: a path argument inside a protected path, or above one (deleting a
+    parent deletes what it contains), and a command whose arguments name a
+    protected path in any form, including as an option value.
+    """
     spec = ctx.spec
-    if spec is None or not (spec.effects & _MODIFYING) or not ctx.scope.protected_paths:
+    s = ctx.scope
+    if spec is None or not (spec.effects & _MODIFYING) or not s.protected_paths:
         return []
-    candidates: list[tuple[str, str]] = []
+    literal = [normalize_path(p, s.cwd) for p in s.protected_paths if not any(c in p for c in "*?[")]
+    hits: list[tuple[str, object, str]] = []
+
     for name, _, value in _role_values(spec, action, ArgRole.PATH):
-        if isinstance(value, str):
-            candidates.append((name, value))
+        try:
+            path = normalize_path(value, s.cwd)
+        except ValueError:
+            continue  # the scope check reports malformed paths
+        hit = path_matches(path, s.protected_paths, s.cwd)
+        if hit is None and spec.effects & {Effect.WRITE, Effect.DELETE}:
+            hit = next((p for p in literal if path_within(p, path)), None)
+        if hit is not None:
+            hits.append((name, value, hit))
+
     for name, _, value in _role_values(spec, action, ArgRole.COMMAND):
         try:
-            candidates += [(name, token) for token in parse_command(value)[1:]]
+            argv = parse_command(value)
         except ValueError:
             continue  # the scope check reports unparseable commands
-    findings = []
-    for name, raw in candidates:
-        try:
-            path = normalize_path(raw, ctx.scope.cwd)
-        except ValueError:
-            continue
-        hit = path_matches(path, ctx.scope.protected_paths)
-        if hit is not None:
-            findings.append(
-                Finding(
-                    "protected",
-                    Verdict.HALT,
-                    f"{name}={raw!r} touches protected path {hit!r}; modifying oversight ends the session",
-                )
-            )
-    return findings
+        for raw in command_path_args(argv):
+            try:
+                hit = path_matches(normalize_path(raw, s.cwd), s.protected_paths, s.cwd)
+            except ValueError:
+                continue  # the scope check reports malformed arguments
+            if hit is not None:
+                hits.append((name, value, hit))
+                break
+        else:
+            # Belt and braces: the protected path spelled out anywhere in the command.
+            for p in literal:
+                spellings = {p} | ({posixpath.relpath(p, s.cwd)} if path_within(p, s.cwd) else set())
+                if any(sp in value for sp in spellings - {"."}):
+                    hits.append((name, value, p))
+                    break
+
+    return [
+        Finding(
+            "protected",
+            Verdict.HALT,
+            f"{name}={value!r} touches protected path {hit!r}; modifying oversight ends the session",
+        )
+        for name, value, hit in hits
+    ]
 
 
 def scope(ctx: Context, action: Action) -> list[Finding]:
@@ -127,7 +154,7 @@ def scope(ctx: Context, action: Action) -> list[Finding]:
                 deny(f"{name}: {exc}")
                 continue
             allowed, kind = (s.write_paths, "write") if writes else (s.read_paths, "read")
-            if path_matches(path, allowed) is None:
+            if path_matches(path, allowed, s.cwd) is None:
                 deny(f"{name}={value!r} resolves to {path!r}, outside {kind} scope")
         elif role is ArgRole.URL:
             try:
@@ -150,12 +177,22 @@ def scope(ctx: Context, action: Action) -> list[Finding]:
                 deny(f"{name}: {exc}")
         elif role is ArgRole.COMMAND:
             try:
-                parse_command(value)
+                argv = parse_command(value)
             except ValueError as exc:
                 deny(f"{name}: {exc}")
                 continue
             if not command_allowed(value, s):
-                deny(f"{name}: program {parse_command(value)[0]!r} is not in scope")
+                deny(f"{name}: program {argv[0]!r} is not in scope")
+            # Arguments are held to read scope. What an allowlisted program then
+            # does with them is up to the program, so allowlist accordingly.
+            for raw in command_path_args(argv):
+                try:
+                    path = normalize_path(raw, s.cwd)
+                except ValueError as exc:
+                    deny(f"{name}: {exc}")
+                    continue
+                if path_matches(path, s.read_paths, s.cwd) is None:
+                    deny(f"{name}: argument {raw!r} resolves to {path!r}, outside read scope")
     return findings
 
 
@@ -187,8 +224,6 @@ def irreversible(ctx: Context, action: Action) -> list[Finding]:
 
 def budget(ctx: Context, action: Action) -> list[Finding]:
     spec = ctx.spec
-    if spec is None:
-        return []
     b = ctx.policy.budget
     u = ctx.usage
     findings = []
@@ -197,7 +232,7 @@ def budget(ctx: Context, action: Action) -> list[Finding]:
     limit = b.max_calls_per_tool.get(action.tool)
     if limit is not None and u.per_tool[action.tool] >= limit:
         findings.append(Finding("budget", Verdict.DENY, f"{action.tool!r} call limit ({limit}) reached"))
-    if Effect.SPEND in spec.effects and b.max_spend is not None:
+    if spec is not None and Effect.SPEND in spec.effects and b.max_spend is not None:
         amount = 0.0
         for _, _, value in _role_values(spec, action, ArgRole.AMOUNT):
             try:

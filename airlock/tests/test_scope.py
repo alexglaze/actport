@@ -3,7 +3,9 @@ import pytest
 from airlock.scope import (
     Scope,
     command_allowed,
+    command_path_args,
     host_allowed,
+    normalize_host,
     normalize_path,
     parse_amount,
     parse_command,
@@ -151,3 +153,44 @@ class TestScopeCeiling:
             commands=("make",),
         )
         assert len(wide.exceeds(self.ceiling)) == 7
+
+
+class TestReviewRegressions:
+    def test_relative_patterns_resolve_against_cwd(self) -> None:
+        assert path_matches("/workspace/.airlock/p.toml", (".airlock",), "/workspace") == ".airlock"
+        assert path_matches("/.airlock/p.toml", (".airlock",), "/workspace") is None
+
+    def test_cwd_must_be_absolute(self) -> None:
+        with pytest.raises(ValueError, match="absolute"):
+            Scope(cwd="workspace")
+
+    @pytest.mark.parametrize(
+        ("session", "ok"),
+        [
+            ("/workspace/out/report-?.md", True),  # identical glob
+            ("/workspace/out/report-*.md", False),  # wider glob than the ceiling's
+            ("/workspace/out/report-1.md", False),  # plain name under a glob: its subtree is not vouched for
+            ("/workspace/notes/*.md", True),  # glob entirely under a plain ceiling directory
+            ("/workspace/notes*", False),  # would also match /workspace/notes-old/...
+            ("/workspace/notes/../*", False),
+        ],
+    )
+    def test_glob_grants_cannot_widen_the_ceiling(self, session: str, ok: bool) -> None:
+        ceiling = Scope(write_paths=("/workspace/out/report-?.md", "/workspace/notes"))
+        assert (Scope(write_paths=(session,)).exceeds(ceiling) == []) is ok
+
+    @pytest.mark.parametrize(
+        "host",
+        ["faß.example", "ｄｏｃｓ.example.org", "a\\b.docs.example.org", "a_b.example", "-x.example"],  # noqa: RUF001 - lookalikes are the point
+    )
+    def test_ambiguous_or_malformed_hosts_are_rejected(self, host: str) -> None:
+        with pytest.raises(ValueError):
+            normalize_host(host)
+
+    def test_reversible_international_names_are_accepted_as_punycode(self) -> None:
+        assert normalize_host("bücher.example") == "xn--bcher-kva.example"
+        assert host_allowed("bücher.example", ("xn--bcher-kva.example",))
+
+    def test_command_path_arguments_include_option_values(self) -> None:
+        argv = ["prog", "notes.md", "-q", "--out=/tmp/x", "-o/etc/y", "-Dk=/etc/z", "--flag", "k=v/w"]
+        assert command_path_args(argv) == ["notes.md", "/tmp/x", "/etc/y", "/etc/z", "v/w"]

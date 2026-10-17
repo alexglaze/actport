@@ -54,3 +54,18 @@ def test_non_scalar_values_are_novel() -> None:
     assert p.attribute(True).origin is Origin.NOVEL
     assert p.attribute(None).origin is Origin.NOVEL
     assert p.attribute(float("nan")).origin is Origin.NOVEL
+
+
+def test_punctuation_inside_addresses_is_not_a_boundary() -> None:
+    p = Provenance()
+    p.add_trusted("Send it to finance-team@acme.example.", "task")
+    p.add_untrusted("cc team@acme.example.org", "doc")
+    assert p.attribute("team@acme.example").origin is Origin.NOVEL
+    assert p.attribute("finance-team@acme.example").origin is Origin.TRUSTED  # sentence-final dot is fine
+
+
+def test_numeric_strings_compare_numerically() -> None:
+    p = ledger()
+    assert p.attribute("4800").origin is Origin.UNTRUSTED
+    assert p.attribute("$4,800.00").origin is Origin.UNTRUSTED
+    assert p.attribute("420").origin is Origin.TRUSTED

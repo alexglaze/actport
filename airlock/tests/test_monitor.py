@@ -78,3 +78,8 @@ def test_monitor_plugs_into_the_gateway() -> None:
 def test_invalid_thresholds_are_rejected() -> None:
     with pytest.raises(ValueError):
         LLMMonitor(lambda p: "", escalate_at=80, deny_at=50)
+
+
+def test_max_history_zero_sends_no_history() -> None:
+    prompt = LLMMonitor(lambda p: "", max_history=0).render(ctx(output="SECRET-ISH OUTPUT"))
+    assert "SECRET-ISH OUTPUT" not in prompt and "(no prior steps)" in prompt

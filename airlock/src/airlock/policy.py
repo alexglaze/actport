@@ -48,6 +48,10 @@ class Policy:
         warnings: list[str] = []
         if self.unknown_tool is Verdict.ALLOW:
             warnings.append("policy.unknown_tool = allow: unregistered tools run unchecked")
+        elif self.unknown_tool is Verdict.ESCALATE:
+            warnings.append(
+                "policy.unknown_tool = escalate: approved unregistered tools skip every effect-based check"
+            )
         if self.irreversible is Verdict.ALLOW:
             warnings.append("checks.irreversible = allow: irreversible actions need no review")
         if self.provenance is Verdict.ALLOW:
@@ -162,7 +166,10 @@ def _scope(raw: Mapping[str, Any]) -> Scope:
         for key in fields
         if key in raw
     }
-    return Scope(cwd=_str(raw.get("cwd", "/"), "scope.cwd"), **lists)
+    try:
+        return Scope(cwd=_str(raw.get("cwd", "/"), "scope.cwd"), **lists)
+    except ValueError as exc:
+        raise PolicyError(f"scope.cwd: {exc}") from None
 
 
 def _budget(raw: Mapping[str, Any]) -> Budget:

@@ -9,12 +9,15 @@ from __future__ import annotations
 import fnmatch
 import math
 import posixpath
+import re
 import shlex
 from dataclasses import dataclass, replace
 from email.utils import parseaddr
 from urllib.parse import urlsplit
 
 _SHELL_SYNTAX = frozenset(";&|<>`$\n\r")
+_GLOB = frozenset("*?[")
+_LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)")
 
 
 @dataclass(frozen=True)
@@ -31,14 +34,18 @@ class Scope:
     payees: tuple[str, ...] = ()
     commands: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.cwd, str) or not self.cwd.startswith("/"):
+            raise ValueError(f"scope cwd must be an absolute path, got {self.cwd!r}")
+
     def exceeds(self, ceiling: Scope) -> list[str]:
         """List every grant in this scope that ``ceiling`` does not also grant."""
         problems: list[str] = []
         for path in self.read_paths:
-            if path_matches(normalize_path(path), ceiling.read_paths) is None:
+            if not _grant_within(path, self.cwd, ceiling.read_paths, ceiling.cwd):
                 problems.append(f"read path {path!r}")
         for path in self.write_paths:
-            if path_matches(normalize_path(path), ceiling.write_paths) is None:
+            if not _grant_within(path, self.cwd, ceiling.write_paths, ceiling.cwd):
                 problems.append(f"write path {path!r}")
         problems += [f"domain {d!r}" for d in self.domains if not host_allowed(d, ceiling.domains)]
         problems += [f"recipient {r!r}" for r in self.recipients if not recipient_allowed(r, ceiling)]
@@ -73,26 +80,93 @@ def path_within(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "/")
 
 
-def path_matches(path: str, patterns: tuple[str, ...]) -> str | None:
-    """Return the first pattern that covers ``path``: a glob, or a directory prefix."""
+def _is_glob(pattern: str) -> bool:
+    return any(ch in _GLOB for ch in pattern)
+
+
+def path_matches(path: str, patterns: tuple[str, ...], cwd: str = "/") -> str | None:
+    """Return the first pattern that covers ``path``.
+
+    A pattern with ``*``, ``?`` or ``[`` is a glob (``*`` also crosses ``/``);
+    anything else covers that path and everything below it. Relative
+    patterns resolve against ``cwd``.
+    """
     for pattern in patterns:
-        if any(ch in pattern for ch in "*?["):
-            if fnmatch.fnmatchcase(path, pattern):
+        resolved = normalize_path(pattern, cwd)
+        if _is_glob(resolved):
+            if fnmatch.fnmatchcase(path, resolved):
                 return pattern
-        elif path_within(path, normalize_path(pattern)):
+        elif path_within(path, resolved):
             return pattern
     return None
 
 
+def _grant_within(entry: str, cwd: str, ceiling: tuple[str, ...], ceiling_cwd: str) -> bool:
+    """True only if every path ``entry`` could match is also covered by ``ceiling``.
+
+    A glob is accepted if the ceiling has the identical glob, or if everything
+    it can match lies under a plain directory in the ceiling. A plain entry
+    must lie under a plain ceiling directory: a glob ceiling cannot vouch for
+    the subtree below a name it happens to match.
+    """
+    resolved = normalize_path(entry, cwd)
+    roots = [normalize_path(c, ceiling_cwd) for c in ceiling]
+    plain = [r for r in roots if not _is_glob(r)]
+    if not _is_glob(resolved):
+        return any(path_within(resolved, r) for r in plain)
+    if resolved in roots:
+        return True
+    literal = resolved[: min(resolved.index(ch) for ch in _GLOB if ch in resolved)]
+    base = normalize_path(literal[: literal.rfind("/") + 1] or "/")
+    return any(path_within(base, r) for r in plain)
+
+
+def command_path_args(argv: list[str]) -> list[str]:
+    """Arguments of a command that may name a path, including ``--opt=PATH`` and ``-oPATH``.
+
+    Positional arguments are all treated as paths, since only the program knows
+    which ones are. Option values are treated as paths when they look like one.
+    """
+    found = []
+    for token in argv[1:]:
+        if token.startswith("-"):
+            value = "" if token.startswith("--") else token[2:]  # -oPATH
+            if "=" in token:
+                value = token.split("=", 1)[1]  # --opt=PATH, -Dkey=PATH
+            if value.startswith(("/", ".", "~")) or "/" in value:
+                found.append(value)
+        elif "=" in token:
+            found.append(token.split("=", 1)[1] or ".")
+        else:
+            found.append(token)
+    return found
+
+
 def normalize_host(host: str) -> str:
-    """Lowercase and IDNA-encode, so a non-ASCII lookalike never equals an ASCII name."""
+    """Return the ASCII (punycode) form of a hostname, or raise ``ValueError``.
+
+    Non-ASCII names are accepted only if encoding is reversible. IDNA 2003
+    maps some characters (``ß``, fullwidth letters) onto plain ASCII, while
+    other resolvers do not, so such a name could be checked as one host and
+    connect to another. Those are rejected, as is anything that is not a
+    syntactically valid DNS name.
+    """
+    if not isinstance(host, str):
+        raise ValueError("host must be a string")
     host = host.strip().rstrip(".").lower()
     if not host:
         raise ValueError("empty host")
-    try:
-        return host.encode("idna").decode("ascii")
-    except UnicodeError as exc:
-        raise ValueError(f"invalid host {host!r}") from exc
+    if not host.isascii():
+        try:
+            encoded = host.encode("idna")
+            if encoded.decode("idna") != host:
+                raise ValueError(f"ambiguous internationalised host {host!r}")
+        except UnicodeError as exc:
+            raise ValueError(f"invalid host {host!r}") from exc
+        host = encoded.decode("ascii")
+    if len(host) > 253 or not all(_LABEL.fullmatch(label) for label in host.split(".")):
+        raise ValueError(f"invalid host {host!r}")
+    return host
 
 
 def host_allowed(host: str, allowed: tuple[str, ...]) -> bool:

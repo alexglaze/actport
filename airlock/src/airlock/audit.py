@@ -22,7 +22,12 @@ GENESIS = "0" * 64
 
 
 def _canonical(obj: Any) -> bytes:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode()
+    # ensure_ascii keeps every record encodable, including text with lone surrogates.
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str).encode()
+
+
+def _line(record: Mapping[str, Any]) -> str:
+    return json.dumps(record, sort_keys=True, ensure_ascii=True)
 
 
 def _digest(prev: str, body: Mapping[str, Any], key: bytes | None) -> str:
@@ -72,8 +77,8 @@ class AuditLog:
         body = json.loads(_canonical(body))
         record = {**body, "hash": _digest(self._head, body, self._key)}
         if self.path is not None:
-            with open(self.path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+            with open(self.path, "a", encoding="ascii") as fh:
+                fh.write(_line(record) + "\n")
         self.records.append(record)
         self._seq += 1
         self._head = record["hash"]
@@ -89,17 +94,23 @@ class VerifyResult:
 
 
 def verify(path: str | Path, *, key: bytes | None = None) -> VerifyResult:
-    """Re-walk the chain. Reports the first record that does not check out."""
+    """Re-walk the chain. Reports the first record that does not check out.
+
+    Each line must also be byte-for-byte the canonical serialisation of the
+    record it parses to, so text that the parser would silently drop (a
+    duplicated key, say) cannot ride along on a valid hash.
+    """
     prev = GENESIS
     count = 0
-    with open(path, encoding="utf-8") as fh:
-        for lineno, line in enumerate(fh, 1):
-            if not line.strip():
-                return VerifyResult(False, count, prev, f"line {lineno}: blank line")
+    with open(path, "rb") as fh:
+        for lineno, raw in enumerate(fh, 1):
             try:
+                line = raw.decode("ascii").rstrip("\n")
                 record = json.loads(line)
+                if _line(record) != line:
+                    return VerifyResult(False, count, prev, f"line {lineno}: not in canonical form")
                 claimed = record.pop("hash")
-            except (json.JSONDecodeError, KeyError, AttributeError, TypeError):
+            except (UnicodeDecodeError, json.JSONDecodeError, KeyError, AttributeError, TypeError):
                 return VerifyResult(False, count, prev, f"line {lineno}: not a valid record")
             if record.get("seq") != count + 1:
                 return VerifyResult(False, count, prev, f"line {lineno}: sequence gap or reorder")

@@ -90,3 +90,25 @@ def test_non_json_values_are_stored_as_strings(tmp_path: Path) -> None:
     path = tmp_path / "a.jsonl"
     AuditLog(path).append("result", {"value": Path("/x"), "nested": {"set": {1}}})
     assert verify(path).ok
+
+
+def test_non_canonical_lines_are_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "a.jsonl"
+    make_log(path)
+    # Same parsed record, extra bytes: a duplicated key the parser would silently drop.
+    rewrite(path, lambda lines: [lines[0].replace('{"data"', '{"data": "x", "data"', 1), *lines[1:]])
+    assert "canonical" in verify(path).error
+
+
+def test_undecodable_logs_fail_verification_cleanly(tmp_path: Path) -> None:
+    path = tmp_path / "a.jsonl"
+    make_log(path)
+    path.write_bytes(path.read_bytes() + b"\xff\xfe\n")
+    result = verify(path)
+    assert not result.ok and result.count == 3
+
+
+def test_lone_surrogates_are_logged_and_verify(tmp_path: Path) -> None:
+    path = tmp_path / "a.jsonl"
+    AuditLog(path).append("decision", {"args": {"content": "x\ud800y"}})
+    assert verify(path).ok

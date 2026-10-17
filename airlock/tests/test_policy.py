@@ -85,3 +85,13 @@ def test_load_policy_reports_toml_errors(tmp_path: Path) -> None:
     bad.write_text("[policy\nname = 1\n")
     with pytest.raises(PolicyError, match=r"bad\.toml"):
         load_policy(bad)
+
+
+def test_relative_cwd_is_rejected() -> None:
+    with pytest.raises(PolicyError, match=r"^scope\.cwd"):
+        policy_from_dict(minimal(scope={"cwd": "workspace"}))
+
+
+def test_lint_flags_escalating_unknown_tools() -> None:
+    policy = policy_from_dict(minimal(policy={"unknown_tool": "escalate"}))
+    assert any("skip every effect-based check" in w for w in policy.lint())

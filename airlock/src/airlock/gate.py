@@ -132,10 +132,17 @@ class Session:
                 )
                 verdict = Verdict.HALT
 
-        if verdict is Verdict.ALLOW and spec is not None:
-            self.usage.actions += 1
-            self.usage.per_tool[action.tool] += 1
-            self.usage.spend += spend_of(spec, action)
+        if verdict is Verdict.ALLOW:
+            # Counted for unregistered tools too: an approved unknown tool still uses budget.
+            try:
+                spend = spend_of(spec, action) if spec is not None else 0.0
+            except ValueError as exc:
+                findings.append(Finding("budget", Verdict.DENY, f"cannot account for spend: {exc}"))
+                verdict = Verdict.DENY
+            else:
+                self.usage.actions += 1
+                self.usage.per_tool[action.tool] += 1
+                self.usage.spend += spend
 
         return self._finish(Decision(step, action, verdict, tuple(findings), review))
 
@@ -155,18 +162,31 @@ class Session:
             self.id, self.task, step, action, self.policy.tools.get(action.tool), findings
         )
         try:
-            return reviewer.review(request)
+            review = reviewer.review(request)
         except Exception as exc:  # noqa: BLE001 - a broken reviewer is a rejection
             return Review(approved=False, reviewer="error", note=f"{type(exc).__name__}: {exc}")
+        if not isinstance(review, Review) or not isinstance(review.approved, bool):
+            return Review(
+                approved=False, reviewer="error", note=f"reviewer returned {review!r}, not a Review"
+            )
+        return review
 
     def _finish(self, decision: Decision) -> Decision:
+        try:
+            self._log("decision", _decision_record(decision))
+            if decision.verdict is Verdict.HALT:
+                self._log("halt", {"step": decision.step})
+        except Exception as exc:  # noqa: BLE001 - an action that cannot be audited does not run
+            failure = Finding(
+                "audit", Verdict.HALT, f"audit write failed, halting: {type(exc).__name__}: {exc}"
+            )
+            decision = Decision(
+                decision.step, decision.action, Verdict.HALT, (*decision.findings, failure), decision.review
+            )
         if decision.verdict is Verdict.HALT:
             self.halted = True
         self.decisions.append(decision)
         self.history.append(Step(decision.action, decision.verdict))
-        self._log("decision", _decision_record(decision))
-        if decision.verdict is Verdict.HALT:
-            self._log("halt", {"step": decision.step})
         return decision
 
     # -- results -----------------------------------------------------------
@@ -187,12 +207,16 @@ class Session:
             self.history[index] = Step(decision.action, decision.verdict, text)
         record: dict[str, Any] = {
             "step": decision.step,
-            "sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "sha256": hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest(),
             "chars": len(text),
         }
         if self.airlock.log_outputs:
             record["output"] = text
-        self._log("result", record)
+        try:
+            self._log("result", record)
+        except Exception:
+            self.halted = True  # the tool already ran; stop before anything else does unaudited
+            raise
 
     def call(self, tools: Mapping[str, Callable[..., Any]], tool: str, **args: Any) -> Any:
         """Check, run, and record one call. Raises ``ActionBlocked`` if not allowed."""

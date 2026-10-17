@@ -117,6 +117,8 @@ class LLMMonitor:
     ) -> None:
         if not 0 <= escalate_at <= deny_at <= 100:
             raise ValueError("need 0 <= escalate_at <= deny_at <= 100")
+        if max_history < 0 or max_output_chars < 0:
+            raise ValueError("max_history and max_output_chars must be non-negative")
         self._judge = judge
         self.escalate_at = escalate_at
         self.deny_at = deny_at
@@ -127,7 +129,8 @@ class LLMMonitor:
 
     def render(self, ctx: MonitorContext) -> str:
         steps = []
-        for i, step in enumerate(ctx.history[-self.max_history :], 1):
+        recent = ctx.history[-self.max_history :] if self.max_history else ()
+        for i, step in enumerate(recent, 1):
             line = f"{i}. {_fence(step.action.describe())} -> {step.verdict}"
             if step.output is not None:
                 output = step.output[: self.max_output_chars]
