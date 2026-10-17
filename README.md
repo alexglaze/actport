@@ -32,6 +32,8 @@ pytest
 python -m airlock eval
 ```
 
+Built with [Claude Code](https://claude.com/claude-code).
+
 ## Also in this repository
 
 The rest of the root is the source for my acting portfolio site (Next.js,
