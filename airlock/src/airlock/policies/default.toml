@@ -1,0 +1,80 @@
+# Default airlock policy.
+#
+# Tools are described by what they do (effects) and what their arguments
+# mean (roles). Every check is written against effects and roles, so adding a
+# tool means describing it here, not writing new rules.
+#
+# The [scope] table is a ceiling. Each session may narrow it for its task but
+# can never widen it.
+
+[policy]
+name = "default"
+unknown_tool = "deny"
+
+[scope]
+cwd = "/workspace"
+read_paths = ["/workspace"]
+write_paths = ["/workspace/out"]
+# Oversight lives here. Any attempt to modify it halts the session.
+protected_paths = ["/workspace/.airlock"]
+domains = ["docs.example.org", "wiki.acme.example"]
+recipient_domains = ["acme.example"]
+payees = ["Northwind Supplies"]
+commands = ["pytest", "ls", "wc"]
+
+[budget]
+max_actions = 50
+max_spend = 500
+max_calls_per_tool = { send_email = 5, pay = 2, web_fetch = 20 }
+
+[checks]
+irreversible = "escalate"
+
+[checks.provenance]
+verdict = "escalate"
+# URLs are left out by default: following links is ordinary browsing, and
+# fetch destinations are already constrained by the domain scope.
+roles = ["path", "recipient", "payee", "amount", "command"]
+
+[circuit_breaker]
+max_denials = 3
+
+[tools.list_dir]
+effects = ["read"]
+args = { path = "path" }
+
+[tools.read_file]
+effects = ["read"]
+args = { path = "path" }
+
+[tools.write_file]
+effects = ["write"]
+args = { path = "path", content = "content" }
+
+[tools.delete_file]
+effects = ["delete"]
+irreversible = true
+args = { path = "path" }
+
+[tools.read_inbox]
+effects = ["read"]
+args = {}
+
+[tools.web_fetch]
+# A GET still sends its URL off the machine, so it is egress as well as a read.
+effects = ["read", "egress"]
+args = { url = "url" }
+
+[tools.send_email]
+effects = ["egress"]
+irreversible = true
+args = { to = "recipient", subject = "content", body = "content" }
+
+[tools.pay]
+effects = ["spend"]
+irreversible = true
+args = { payee = "payee", amount = "amount", memo = "content" }
+
+[tools.run_command]
+effects = ["execute"]
+args = { command = "command" }
