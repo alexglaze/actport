@@ -131,4 +131,4 @@ Early and opinionated. The interfaces may change. The things I'd most like
 to improve are in the open problems section of
 [position.md](docs/position.md#open-problems).
 
-Built with [Claude Code](https://claude.com/claude-code). MIT licensed.
+Built by Alex Glaze with [Claude Code](https://claude.com/claude-code). MIT licensed.

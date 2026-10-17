@@ -1,5 +1,7 @@
 # airlock
 
+By Alex Glaze, built with [Claude Code](https://claude.com/claude-code).
+
 A policy gateway between a tool-using AI agent and the tools it calls.
 
 Every action the agent proposes is checked against a declared policy before
@@ -31,8 +33,6 @@ pip install -e ".[dev]"
 pytest
 python -m airlock eval
 ```
-
-Built with [Claude Code](https://claude.com/claude-code).
 
 ## Also in this repository
 
